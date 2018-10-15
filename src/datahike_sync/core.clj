@@ -1,6 +1,6 @@
 (ns datahike-sync.core
   (:require [datahike.api :as d]
-            [juxt.dirwatch :refer [watch-dir] :as dw]))
+            [juxt.dirwatch :refer [watch-dir]]))
 
 
 (def master-dir "/tmp/master-dat")
@@ -81,6 +81,7 @@
 (get-all-names master-conn)
 ;; => #{["Charlie"] ["Dorothy"] ["Alice"] ["Eve"] ["Bob"]}
 
+;; wait a moment for the data to propagate through the peer to peer network
 ;; check slave state connection
 (get-all-names (:conn @slave-state))
 ;; => #{["Charlie"] ["Dorothy"] ["Alice"] ["Eve"] ["Bob"]}
