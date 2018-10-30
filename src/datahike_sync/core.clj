@@ -2,7 +2,6 @@
   (:require [datahike.api :as d]
             [juxt.dirwatch :refer [watch-dir]]))
 
-
 (def master-dir "/tmp/master-dat")
 (def master-uri (str "datahike:file://" master-dir))
 
