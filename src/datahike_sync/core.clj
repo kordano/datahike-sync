@@ -7,9 +7,6 @@
 
 (def schema [{:db/ident :name
               :db/valueType :db.type/string
-              :db/cardinality :db.cardinality/one}
-             {:db/ident :age
-              :db/valueType :db.type/long
               :db/cardinality :db.cardinality/one}])
 
 (comment
@@ -29,13 +26,13 @@
        @conn))
 
 ;; lets add some data and wait for the transaction
-(d/transact origin-conn [{:name "Alice" :age 33}
-                         {:name "Bob" :age 37}
-                         {:name "Charlie" :age 55}])
+(d/transact origin-conn [{:name "Christian"}
+                         {:name "Judith"}
+                         {:name "Konrad"}])
 
 (get-all-names origin-conn)
-;; => #{["Charlie"] ["Alice"] ["Bob"]}
-
+;; => #{["Konrad"] ["Christian"] ["Judith"]}
+;;
 (def clone-dir "/tmp/clone-dat")
 (def clone-uri (str "datahike:file://" clone-dir))
 
@@ -46,40 +43,38 @@
 
 ;; let's check the cloned data
 (get-all-names clone-conn)
-;; => #{["Charlie"] ["Alice"] ["Bob"]}
-
-
+;; => #{["Konrad"] ["Christian"] ["Judith"]}
+;;
 ;; add new data to the origin database
-(d/transact origin-conn [{:name "Dorothy"}])
+(d/transact origin-conn [{:name "Pablo"}])
 
 ;; check new data in the origin
 (get-all-names origin-conn)
-;; => #{["Charlie"] ["Dorothy"] ["Alice"] ["Bob"]}
+;; => #{["Konrad"] ["Pablo"] ["Christian"] ["Judith"]}
 
-
-;; check new data in the clone
+;; check new data in the clone, "Pablo" is missing
 (get-all-names clone-conn)
-;; => #{["Charlie"] ["Alice"] ["Bob"]}
+;; => #{["Konrad"] ["Christian"] ["Judith"]}
 
 ;; reconnect clone
 (def clone-conn (d/connect clone-uri))
 
 ;; check clone again
 (get-all-names clone-conn)
-;; => #{["Charlie"] ["Dorothy"] ["Alice"] ["Bob"]}
+;; => #{["Konrad"] ["Pablo"] ["Christian"] ["Judith"]}
 
+;; watcher function for changes in dat signatures
 (defn reconnect []
   (let [state (atom {:chan (chan)
                      :conn (d/connect clone-uri)})]
-    (go-loop []
-      (let [event (<! (:chan @state))]
-        (case event
-          :stop (println :stopping)
-          :reconnect (do
-                       (println :reconnect)
-                       (swap! state assoc :conn (d/connect clone-uri))
-                       (recur))
-          (recur))))
+    (go-loop [event :reconnect]
+      (case event
+        :stop (println :stopping)
+        :reconnect (do
+                     (swap! state assoc :conn (d/connect clone-uri))
+                     (println :reconnected)
+                     (recur (<! (:chan @state))))
+        (recur (<! (:chan @state)))))
     (go-loop [l (.length (clojure.java.io/file (str clone-dir "/.dat/content.signatures")))]
       (<! (timeout 2000))
       (let [new-l (.length (clojure.java.io/file (str clone-dir "/.dat/content.signatures")))]
@@ -90,22 +85,24 @@
 
 (def state (reconnect))
 
-(put! (:chan @state) :reconnect)
-
 ;; add new data to origin and check it
-(d/transact origin-conn [{:name "Eve"}])
+(d/transact origin-conn [{:name "Chrislain"}])
 
 (get-all-names origin-conn)
-;; => #{["Charlie"] ["Dorothy"] ["Alice"] ["Eve"] ["Bob"]}
+;; => #{["Konrad"] ["Chrislain"] ["Pablo"] ["Christian"] ["Judith"]}
 
-;; you'll see the :reconnect message
+;; you'll see the :reconnect message once a the connection was refreshed
 (get-all-names (:conn @state))
-;; => #{["Charlie"] ["Dorothy"] ["Alice"] ["Eve"] ["Bob"]}
+;; => #{["Konrad"] ["Chrislain"] ["Pablo"] ["Christian"] ["Judith"]}
 
-;; let's try again
+;; let's try again!
 (d/transact origin-conn [{:name "Freddy"}])
+
 (get-all-names origin-conn)
-;; => #{["Charlie"] ["Dorothy"] ["Freddy"] ["Alice"] ["Eve"] ["Bob"]}
+;; => #{["Konrad"] ["Chrislain"] ["Pablo"] ["Freddy"] ["Christian"] ["Judith"]}
 
 (get-all-names (:conn @state))
-;; => #{["Charlie"] ["Dorothy"] ["Freddy"] ["Alice"] ["Eve"] ["Bob"]}
+;; => #{["Konrad"] ["Chrislain"] ["Pablo"] ["Freddy"] ["Christian"] ["Judith"]}
+
+;; stop watching
+(put! (:chan @state) :stop)
