@@ -1,19 +1,27 @@
 (ns datahike-sync.core
   (:require [datahike.api :as d]
-            [juxt.dirwatch :refer [watch-dir]]))
+            [clojure.core.async :refer [<! go-loop >! timeout chan put!]]))
 
-(def master-dir "/tmp/master-dat")
-(def master-uri (str "datahike:file://" master-dir))
+(def origin-dir "/tmp/origin-dat")
+(def origin-uri (str "datahike:file://" origin-dir))
+
+(def schema [{:db/ident :name
+              :db/valueType :db.type/string
+              :db/cardinality :db.cardinality/one}
+             {:db/ident :age
+              :db/valueType :db.type/long
+              :db/cardinality :db.cardinality/one}])
 
 (comment
   ;; cleanup database if necessary
-  (d/delete-database master-uri)
+  (d/delete-database origin-uri)
 
   ;; create a database at this place
-  (d/create-database master-uri)
+  (d/create-database origin-uri :initial-tx schema)
+
   )
 
-(def master-conn (d/connect master-uri))
+(def origin-conn (d/connect origin-uri))
 
 (defn get-all-names [conn]
   (d/q '[:find ?n
@@ -21,66 +29,83 @@
        @conn))
 
 ;; lets add some data and wait for the transaction
-@(d/transact master-conn [{:db/id 1 :name "Alice" :age 33}
-                          {:db/id 2 :name "Bob" :age 37}
-                          {:db/id 3 :name "Charlie" :age 55}])
+(d/transact origin-conn [{:name "Alice" :age 33}
+                         {:name "Bob" :age 37}
+                         {:name "Charlie" :age 55}])
 
-(get-all-names master-conn)
+(get-all-names origin-conn)
 ;; => #{["Charlie"] ["Alice"] ["Bob"]}
 
-(def slave-dir "/tmp/slave-dat")
-(def slave-uri (str "datahike:file://" slave-dir))
+(def clone-dir "/tmp/clone-dat")
+(def clone-uri (str "datahike:file://" clone-dir))
 
-;; create a dat in the master-dir directory and share it. Then clone the dat to the slave-dir directory. This should take a second or two.
+;; create a dat in the origin-dir directory and share it. Then clone the dat to the clone-dir directory. This should take a second or two.
 
 ;; connect to cloned connection
-(def slave-conn (d/connect slave-uri))
+(def clone-conn (d/connect clone-uri))
 
 ;; let's check the cloned data
-(get-all-names slave-conn)
+(get-all-names clone-conn)
 ;; => #{["Charlie"] ["Alice"] ["Bob"]}
 
 
-;; add new data to the master database
-@(d/transact master-conn [{:db/id 4 :name "Dorothy"}])
+;; add new data to the origin database
+(d/transact origin-conn [{:name "Dorothy"}])
 
-;; check new data in the master
-(get-all-names master-conn)
+;; check new data in the origin
+(get-all-names origin-conn)
 ;; => #{["Charlie"] ["Dorothy"] ["Alice"] ["Bob"]}
 
 
-;; check new data in the slave
-(get-all-names slave-conn)
+;; check new data in the clone
+(get-all-names clone-conn)
 ;; => #{["Charlie"] ["Alice"] ["Bob"]}
 
-;; reconnect slave
-(def slave-conn (d/connect slave-uri))
+;; reconnect clone
+(def clone-conn (d/connect clone-uri))
 
-;; check slave again
-(get-all-names slave-conn)
+;; check clone again
+(get-all-names clone-conn)
 ;; => #{["Charlie"] ["Dorothy"] ["Alice"] ["Bob"]}
 
-;; create slave state
-(def slave-state (atom {:conn (d/connect slave-uri) :watcher nil}))
-(def slave-meta-dir (clojure.java.io/file (str slave-dir "/meta")))
+(defn reconnect []
+  (let [state (atom {:chan (chan)
+                     :conn (d/connect clone-uri)})]
+    (go-loop []
+      (let [event (<! (:chan @state))]
+        (case event
+          :stop (println :stopping)
+          :reconnect (do
+                       (println :reconnect)
+                       (swap! state assoc :conn (d/connect clone-uri))
+                       (recur))
+          (recur))))
+    (go-loop [l (.length (clojure.java.io/file (str clone-dir "/.dat/content.signatures")))]
+      (<! (timeout 2000))
+      (let [new-l (.length (clojure.java.io/file (str clone-dir "/.dat/content.signatures")))]
+        (when-not (= l new-l)
+          (>! (:chan @state) :reconnect))
+        (recur new-l)))
+    state))
 
-;; add file watcher function
-(defn on-meta-change [state file]
-  (prn "File changed:" (.getPath (:file file)))
-  (swap! state assoc :conn (d/connect slave-uri)))
+(def state (reconnect))
 
-;; add watcher to file changes
-(swap! slave-state assoc :watcher (watch-dir
-                                   (partial on-meta-change slave-state)
-                                   slave-meta-dir))
+(put! (:chan @state) :reconnect)
 
-;; add new data to master and check it
-@(d/transact master-conn [{:db/id 5 :name "Eve"}])
+;; add new data to origin and check it
+(d/transact origin-conn [{:name "Eve"}])
 
-(get-all-names master-conn)
+(get-all-names origin-conn)
 ;; => #{["Charlie"] ["Dorothy"] ["Alice"] ["Eve"] ["Bob"]}
 
-;; wait a moment for the data to propagate through the peer to peer network
-;; check slave state connection
-(get-all-names (:conn @slave-state))
+;; you'll see the :reconnect message
+(get-all-names (:conn @state))
 ;; => #{["Charlie"] ["Dorothy"] ["Alice"] ["Eve"] ["Bob"]}
+
+;; let's try again
+(d/transact origin-conn [{:name "Freddy"}])
+(get-all-names origin-conn)
+;; => #{["Charlie"] ["Dorothy"] ["Freddy"] ["Alice"] ["Eve"] ["Bob"]}
+
+(get-all-names (:conn @state))
+;; => #{["Charlie"] ["Dorothy"] ["Freddy"] ["Alice"] ["Eve"] ["Bob"]}
