@@ -63,6 +63,11 @@
 (get-all-names clone-conn)
 ;; => #{["Konrad"] ["Pablo"] ["Christian"] ["Judith"]}
 
+;; check dat content signatures length
+
+(defn get-signatures-length []
+  (.length (clojure.java.io/file (str clone-dir "/.dat/content.signatures"))))
+
 ;; watcher function for changes in dat signatures
 (defn reconnect []
   (let [state (atom {:chan (chan)
@@ -75,9 +80,9 @@
                      (println :reconnected)
                      (recur (<! (:chan @state))))
         (recur (<! (:chan @state)))))
-    (go-loop [l (.length (clojure.java.io/file (str clone-dir "/.dat/content.signatures")))]
+    (go-loop [l (get-signatures-length)]
       (<! (timeout 2000))
-      (let [new-l (.length (clojure.java.io/file (str clone-dir "/.dat/content.signatures")))]
+      (let [new-l (get-signatures-length)]
         (when-not (= l new-l)
           (>! (:chan @state) :reconnect))
         (recur new-l)))
