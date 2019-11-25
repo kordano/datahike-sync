@@ -65,7 +65,7 @@
 
 ;; check dat content signatures length
 
-(defn get-signatures-length []
+(defn signatures-length []
   (.length (clojure.java.io/file (str clone-dir "/.dat/content.signatures"))))
 
 ;; watcher function for changes in dat signatures
@@ -80,9 +80,9 @@
                      (println :reconnected)
                      (recur (<! (:chan @state))))
         (recur (<! (:chan @state)))))
-    (go-loop [l (get-signatures-length)]
+    (go-loop [l (signatures-length)]
       (<! (timeout 2000))
-      (let [new-l (get-signatures-length)]
+      (let [new-l (signatures-length)]
         (when-not (= l new-l)
           (>! (:chan @state) :reconnect))
         (recur new-l)))
